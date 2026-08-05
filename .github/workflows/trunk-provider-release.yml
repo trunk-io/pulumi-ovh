@@ -54,6 +54,9 @@ jobs:
       - name: Prepare workspace
         run: make prepare_local_workspace
 
+      - name: Generate provider schema
+        run: make schema
+
       - name: Build provider
         run: make "provider-${{ matrix.platform.os }}-${{ matrix.platform.arch }}"
         env:
