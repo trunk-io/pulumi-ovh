@@ -1,0 +1,104 @@
+# Binary-only release for trunk-io fork patches (no npm publish).
+name: trunk provider release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Provider version (without leading v)
+        required: true
+        default: 2.17.0-trunk.1
+  push:
+    tags:
+      - v*-trunk.*
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform.os }}-${{ matrix.platform.arch }}
+    runs-on: ubuntu-latest
+    env:
+      PROVIDER_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { os: linux, arch: amd64 }
+          - { os: linux, arch: arm64 }
+          - { os: darwin, arch: amd64 }
+          - { os: darwin, arch: arm64 }
+          - { os: windows, arch: amd64 }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: MOZGIII/install-ldid-action@v1
+        with:
+          tag: v2.1.5-procursus2
+
+      - name: Setup tools
+        uses: ./.github/actions/setup-tools
+        with:
+          tools: pulumictl, go
+          cache-go: false
+
+      - name: Strip v prefix from version
+        shell: bash
+        run: echo "PROVIDER_VERSION=${PROVIDER_VERSION#v}" >> "$GITHUB_ENV"
+
+      - name: Prepare workspace
+        run: make prepare_local_workspace
+
+      - name: Build provider
+        run: make "provider-${{ matrix.platform.os }}-${{ matrix.platform.arch }}"
+        env:
+          SKIP_SIGNING: true
+
+      - name: Package provider
+        run: make "provider_dist-${{ matrix.platform.os }}-${{ matrix.platform.arch }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulumi-resource-ovh-v${{ env.PROVIDER_VERSION }}-${{ matrix.platform.os }}-${{ matrix.platform.arch }}
+          path: bin/pulumi-resource-ovh-v${{ env.PROVIDER_VERSION }}-${{ matrix.platform.os }}-${{ matrix.platform.arch }}.tar.gz
+          retention-days: 7
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      PROVIDER_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+    steps:
+      - name: Strip v prefix from version
+        shell: bash
+        run: echo "PROVIDER_VERSION=${PROVIDER_VERSION#v}" >> "$GITHUB_ENV"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum pulumi-resource-ovh-v*.tar.gz > "pulumi-ovh_${PROVIDER_VERSION}_checksums.txt"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.PROVIDER_VERSION }}
+          name: v${{ env.PROVIDER_VERSION }}
+          body: |
+            Trunk fork release with [ovh/pulumi-ovh#425](https://github.com/ovh/pulumi-ovh/pull/425) applied.
+            Provider binaries only — npm SDK remains `@ovhcloud/pulumi-ovh@2.17.0` with a pnpm patch redirect.
+          files: dist/*
+          generate_release_notes: false
